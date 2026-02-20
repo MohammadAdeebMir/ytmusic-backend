@@ -27,3 +27,8 @@ def search_music(q: str):
 @app.get("/song")
 def song_info(videoId: str):
     return yt.get_song(videoId)
+
+@app.get("/stream")
+def get_stream(videoId: str):
+    url = f"https://www.youtube.com/watch?v={videoId}"
+    return {"audio_url": url}
