@@ -109,4 +109,6 @@ async def get_stream(videoId: str):
         return {
             "error": "STREAM_UNAVAILABLE",
             "detail": str(e)[:200]
+        }            "error": "STREAM_UNAVAILABLE",
+            "detail": str(e)[:200]
         }
