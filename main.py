@@ -1,113 +1,123 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from ytmusicapi import YTMusic
-from cachetools import TTLCache
-import yt_dlp
+from yt_dlp import YoutubeDL
 
 app = FastAPI()
 
-# ---------------- CORS ----------------
+# Enable CORS for all origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ---------------- INIT ----------------
-yt = YTMusic()
-cache = TTLCache(maxsize=500, ttl=300)
+ytmusic = YTMusic()
 
-
-# ---------------- SEARCH ----------------
 @app.get("/search")
-def search_music(q: str):
-    if q in cache:
-        return cache[q]
-
-    results = yt.search(q, filter="songs")[:10]
-    cache[q] = results
-    return results
-
-
-# ---------------- SONG INFO ----------------
-@app.get("/song")
-def song_info(videoId: str):
-    return yt.get_song(videoId)
-
-
-# ---------------- STREAM (RENDER HARDENED) ----------------
-@app.get("/stream")
-async def get_stream(videoId: str):
-    if not videoId:
-        return {"error": "INVALID_VIDEO_ID"}
-
+async def search_songs(q: str):
     try:
-        url = f"https://www.youtube.com/watch?v={videoId}"
-
-        # 🔥 Production-grade yt-dlp config for Render
-        ydl_opts = {
-            "format": "bestaudio[ext=m4a]/bestaudio/best",
-            "quiet": True,
-            "no_warnings": True,
-            "socket_timeout": 30,
-            "noplaylist": True,
-            "extract_flat": False,
-
-            # stability
-            "geo_bypass": True,
-            "force_ipv4": True,
-            "retries": 3,
-            "fragment_retries": 3,
-            "skip_unavailable_fragments": True,
-
-            # 🔥 key anti-block fix
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["android", "web", "tv_embedded"]
-                }
-            },
-
-            # 🔥 mobile user agent
-            "http_headers": {
-                "User-Agent": (
-                    "Mozilla/5.0 (Linux; Android 13; SM-S918B) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0 Mobile Safari/537.36"
-                )
-            },
-        }
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-
-        # primary URL
-        audio_url = info.get("url")
-
-        # 🔥 safer fallback scan
-        if not audio_url:
-            formats = info.get("formats", [])
-            for f in formats:
-                if (
-                    f.get("acodec") != "none"
-                    and f.get("vcodec") == "none"
-                    and f.get("url")
-                ):
-                    audio_url = f["url"]
-                    break
-
-        if not audio_url:
-            return {"error": "STREAM_UNAVAILABLE"}
-
-        return {
-            "audio_url": audio_url,
-            "type": "audio"
-        }
-
+        results = ytmusic.search(q, filter="songs")
     except Exception as e:
-        return {
-            "error": "STREAM_UNAVAILABLE",
-            "detail": str(e)[:200]
-        }            "error": "STREAM_UNAVAILABLE",
-            "detail": str(e)[:200]
+        raise HTTPException(status_code=500, detail=str(e))
+    songs = []
+    for r in results:
+        songs.append({
+            "videoId": r.get("videoId"),
+            "title": r.get("title"),
+            "artists": [artist.get("name") for artist in r.get("artists", [])],
+            "album": r.get("album", {}).get("name"),
+            "albumId": r.get("album", {}).get("id"),
+            "duration": r.get("duration"),
+        })
+    return {"success": True, "results": songs}
+
+@app.get("/song")
+async def get_song(video_id: str):
+    try:
+        data = ytmusic.get_song(video_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    song_details = {
+        "videoId": video_id,
+        "title": data.get("videoDetails", {}).get("title"),
+        "artists": [data.get("videoDetails", {}).get("author")],
+        "duration": data.get("videoDetails", {}).get("lengthSeconds"),
+    }
+    # Fetch album thumbnail (highest quality)
+    album_thumb_url = None
+    audio_playlist_id = data.get("audioPlaylistId")
+    if audio_playlist_id:
+        album_browse_id = ytmusic.get_album_browse_id(audio_playlist_id)
+        if album_browse_id:
+            album_data = ytmusic.get_album(album_browse_id)
+            thumbs = album_data.get("thumbnails") or []
+            # Use other_versions if needed
+            if not thumbs:
+                for v in album_data.get("other_versions", []):
+                    thumbs = v.get("thumbnails") or []
+                    if thumbs:
+                        break
+            if thumbs:
+                # pick highest resolution thumbnail
+                best_thumb = max(thumbs, key=lambda t: t.get("width", 0))
+                album_thumb_url = best_thumb.get("url")
+    # Fallback to video thumbnail if no album art
+    if not album_thumb_url:
+        thumbs = data.get("microformat", {}).get("thumbnail", {}).get("thumbnails") or []
+        if thumbs:
+            best_thumb = max(thumbs, key=lambda t: t.get("width", 0))
+            album_thumb_url = best_thumb.get("url")
+    song_details["thumbnail"] = album_thumb_url
+    return {"success": True, "song": song_details}
+
+@app.get("/stream")
+async def stream_video(video_id: str):
+    ydl_opts = {
+        "format": "bestaudio",
+        "force_ipv4": True,
+        "quiet": True,
+        "no_warnings": True,
+        "retries": 3,
+        "socket_timeout": 10,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Mobile Safari/537.36"
+        }
+    }
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    audio_url = info.get("url")
+    if not audio_url:
+        raise HTTPException(status_code=404, detail="Audio URL not found")
+    return {"success": True, "url": audio_url}
+
+@app.get("/download")
+async def download_video(video_id: str):
+    ydl_opts = {
+        "format": "bestaudio",
+        "force_ipv4": True,
+        "quiet": True,
+        "no_warnings": True,
+        "retries": 3,
+        "socket_timeout": 10,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Mobile Safari/537.36"
+        }
+    }
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    audio_url = info.get("url")
+    title = info.get("title")
+    ext = info.get("ext")
+    if not audio_url:
+        raise HTTPException(status_code=404, detail="Audio URL not found")
+    return {"success": True, "title": title, "ext": ext, "url": audio_url}
