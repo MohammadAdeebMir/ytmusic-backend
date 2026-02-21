@@ -1,5 +1,5 @@
 fastapi
 uvicorn[standard]
 ytmusicapi
-yt-dlp
+yt-dlp>=2025.01.01
 requests
