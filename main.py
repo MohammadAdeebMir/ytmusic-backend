@@ -83,13 +83,14 @@ async def stream_video(video_id: str):
     url = f"https://www.youtube.com/watch?v={video_id}"
 
     ydl_opts = {
-        "format": "bestaudio[ext=m4a]/bestaudio/best",
+        # 🔥 MUCH SAFER FORMAT STRATEGY
+        "format": "bestaudio/best",
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         "extract_flat": False,
 
-        # 🔥 stability
+        # stability
         "geo_bypass": True,
         "force_ipv4": True,
         "nocheckcertificate": True,
@@ -98,7 +99,7 @@ async def stream_video(video_id: str):
         "fragment_retries": 5,
         "skip_unavailable_fragments": True,
 
-        # 🔥 BEST ANTI-BOT CLIENTS
+        # strong client spoof
         "extractor_args": {
             "youtube": {
                 "player_client": [
@@ -111,7 +112,7 @@ async def stream_video(video_id: str):
             }
         },
 
-        # 🔥 STRONG MOBILE UA
+        # mobile UA
         "http_headers": {
             "User-Agent": (
                 "com.google.android.youtube/19.09.37 "
@@ -120,22 +121,30 @@ async def stream_video(video_id: str):
         },
     }
 
-    # 🔥 COOKIE BOOST (optional but gives 99% success)
+    # ✅ cookie support
+    import os
     if os.path.exists("cookies.txt"):
         ydl_opts["cookiefile"] = "cookies.txt"
 
     try:
+        from yt_dlp import YoutubeDL
+
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
-        audio_url = info.get("url")
+        # 🔥 NEW SAFE EXTRACTION
+        audio_url = None
 
-        # fallback scan
+        # direct url first
+        if info.get("url"):
+            audio_url = info["url"]
+
+        # otherwise scan formats
         if not audio_url:
-            for f in info.get("formats", []):
+            formats = info.get("formats", [])
+            for f in formats:
                 if (
                     f.get("acodec") != "none"
-                    and f.get("vcodec") == "none"
                     and f.get("url")
                 ):
                     audio_url = f["url"]
@@ -144,15 +153,17 @@ async def stream_video(video_id: str):
         if not audio_url:
             return {"success": False, "error": "STREAM_UNAVAILABLE"}
 
-        return {"success": True, "url": audio_url}
+        return {
+            "success": True,
+            "url": audio_url
+        }
 
     except Exception as e:
         return {
             "success": False,
             "error": "STREAM_UNAVAILABLE",
-            "detail": str(e)[:180],
+            "detail": str(e)[:200]
         }
-
 
 # ---------------- DOWNLOAD ----------------
 @app.get("/download")
