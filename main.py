@@ -31,27 +31,51 @@ def search_music(q: str):
 def song_info(videoId: str):
     return yt.get_song(videoId)
 
-# ---------------- STREAM (FIXED) ----------------
+# ---------------- STREAM (ULTRA FIX) ----------------
 @app.get("/stream")
 async def get_stream(videoId: str):
     try:
         url = f"https://www.youtube.com/watch?v={videoId}"
 
         ydl_opts = {
-            "format": "bestaudio/best",
+            "format": "bestaudio[ext=m4a]/bestaudio/best",
             "quiet": True,
             "no_warnings": True,
-            "socket_timeout": 10,
+            "socket_timeout": 30,
+            "noplaylist": True,
+            "extract_flat": False,
+
+            # ⭐ CRITICAL FOR RENDER
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android"]
+                }
+            },
+
+            # ⭐ improves success rate
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0"
+            },
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            audio_url = info.get("url") or info["formats"][-1]["url"]
+
+            audio_url = info.get("url")
+            if not audio_url and info.get("formats"):
+                # pick best audio format
+                for f in reversed(info["formats"]):
+                    if f.get("acodec") != "none":
+                        audio_url = f["url"]
+                        break
+
+        if not audio_url:
+            return {"error": "STREAM_UNAVAILABLE"}
 
         return {
             "audio_url": audio_url,
             "type": "audio"
         }
 
-    except Exception:
+    except Exception as e:
         return {"error": "STREAM_UNAVAILABLE"}
