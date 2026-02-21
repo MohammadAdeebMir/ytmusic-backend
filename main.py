@@ -1,4 +1,4 @@
-from fastapi import FastAPfrom fastapi import FastAPI
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from ytmusicapi import YTMusic
 from cachetools import TTLCache
@@ -41,11 +41,12 @@ async def get_stream(videoId: str):
             "format": "bestaudio/best",
             "quiet": True,
             "no_warnings": True,
+            "socket_timeout": 10,
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            audio_url = info["url"]
+            audio_url = info.get("url") or info["formats"][-1]["url"]
 
         return {
             "audio_url": audio_url,
@@ -54,24 +55,3 @@ async def get_stream(videoId: str):
 
     except Exception:
         return {"error": "STREAM_UNAVAILABLE"}
-from fastapi.middleware.cors import CORSMiddleware
-from ytmusicapi import YTMusic
-from cachetools import TTLCache
-import requests
-app = FastAPI()
-
-app.add_middleware(    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-yt = YTMusic()
-cache = TTLCache(maxsize=500, ttl=300)
-
-@app.get("/search")
-def search_music(q: str):
-    if q in cache:
-        return cache[q]
-    results = yt.search(q, filter="songs")[:
