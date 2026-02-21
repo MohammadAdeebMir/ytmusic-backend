@@ -6,6 +6,7 @@ import yt_dlp
 
 app = FastAPI()
 
+# ---------------- CORS ----------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -14,14 +15,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---------------- INIT ----------------
 yt = YTMusic()
 cache = TTLCache(maxsize=500, ttl=300)
+
+# ---------------- HEALTH CHECK ----------------
+@app.get("/")
+def root():
+    return {"status": "ok"}
 
 # ---------------- SEARCH ----------------
 @app.get("/search")
 def search_music(q: str):
     if q in cache:
         return cache[q]
+
     results = yt.search(q, filter="songs")[:10]
     cache[q] = results
     return results
@@ -31,7 +39,7 @@ def search_music(q: str):
 def song_info(videoId: str):
     return yt.get_song(videoId)
 
-# ---------------- STREAM (ULTRA FIX) ----------------
+# ---------------- STREAM (RENDER SAFE ULTRA) ----------------
 @app.get("/stream")
 async def get_stream(videoId: str):
     try:
@@ -44,30 +52,40 @@ async def get_stream(videoId: str):
             "socket_timeout": 30,
             "noplaylist": True,
             "extract_flat": False,
+            "skip_download": True,
 
-            # ⭐ CRITICAL FOR RENDER
+            # 🔥 improves Render success
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["android"]
+                    "player_client": ["android", "web"]
                 }
             },
 
-            # ⭐ improves success rate
+            # 🔥 required for some Render regions
             "http_headers": {
-                "User-Agent": "Mozilla/5.0"
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0 Safari/537.36"
+                )
             },
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
+        audio_url = None
+
+        # Primary
+        if isinstance(info, dict):
             audio_url = info.get("url")
-            if not audio_url and info.get("formats"):
-                # pick best audio format
-                for f in reversed(info["formats"]):
-                    if f.get("acodec") != "none":
-                        audio_url = f["url"]
-                        break
+
+        # Fallback — pick best audio format
+        if not audio_url and info.get("formats"):
+            for f in reversed(info["formats"]):
+                if f.get("acodec") != "none" and f.get("url"):
+                    audio_url = f["url"]
+                    break
 
         if not audio_url:
             return {"error": "STREAM_UNAVAILABLE"}
@@ -78,4 +96,7 @@ async def get_stream(videoId: str):
         }
 
     except Exception as e:
-        return {"error": "STREAM_UNAVAILABLE"}
+        return {
+            "error": "STREAM_UNAVAILABLE",
+            "detail": str(e)[:120]
+        }
