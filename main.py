@@ -6,6 +6,7 @@ import yt_dlp
 
 app = FastAPI()
 
+# ---------------- CORS ----------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -14,6 +15,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---------------- INIT ----------------
 yt = YTMusic()
 cache = TTLCache(maxsize=500, ttl=300)
 
@@ -23,6 +25,7 @@ cache = TTLCache(maxsize=500, ttl=300)
 def search_music(q: str):
     if q in cache:
         return cache[q]
+
     results = yt.search(q, filter="songs")[:10]
     cache[q] = results
     return results
@@ -34,12 +37,16 @@ def song_info(videoId: str):
     return yt.get_song(videoId)
 
 
-# ---------------- STREAM (RENDER PRO FIX) ----------------
+# ---------------- STREAM (RENDER HARDENED) ----------------
 @app.get("/stream")
 async def get_stream(videoId: str):
+    if not videoId:
+        return {"error": "INVALID_VIDEO_ID"}
+
     try:
         url = f"https://www.youtube.com/watch?v={videoId}"
 
+        # 🔥 Production-grade yt-dlp config for Render
         ydl_opts = {
             "format": "bestaudio[ext=m4a]/bestaudio/best",
             "quiet": True,
@@ -48,19 +55,26 @@ async def get_stream(videoId: str):
             "noplaylist": True,
             "extract_flat": False,
 
-            # 🔥 MOST IMPORTANT FIX
+            # stability
+            "geo_bypass": True,
+            "force_ipv4": True,
+            "retries": 3,
+            "fragment_retries": 3,
+            "skip_unavailable_fragments": True,
+
+            # 🔥 key anti-block fix
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["android", "web"]
+                    "player_client": ["android", "web", "tv_embedded"]
                 }
             },
 
-            # 🔥 Helps bypass blocks
+            # 🔥 mobile user agent
             "http_headers": {
                 "User-Agent": (
-                    "Mozilla/5.0 (Linux; Android 10; SM-G973F) "
+                    "Mozilla/5.0 (Linux; Android 13; SM-S918B) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Mobile Safari/537.36"
+                    "Chrome/120.0 Mobile Safari/537.36"
                 )
             },
         }
@@ -68,13 +82,20 @@ async def get_stream(videoId: str):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
-            audio_url = info.get("url")
+        # primary URL
+        audio_url = info.get("url")
 
-            if not audio_url and info.get("formats"):
-                for f in reversed(info["formats"]):
-                    if f.get("acodec") != "none" and f.get("url"):
-                        audio_url = f["url"]
-                        break
+        # 🔥 safer fallback scan
+        if not audio_url:
+            formats = info.get("formats", [])
+            for f in formats:
+                if (
+                    f.get("acodec") != "none"
+                    and f.get("vcodec") == "none"
+                    and f.get("url")
+                ):
+                    audio_url = f["url"]
+                    break
 
         if not audio_url:
             return {"error": "STREAM_UNAVAILABLE"}
